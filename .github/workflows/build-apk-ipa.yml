@@ -17,7 +17,17 @@ jobs:
       - name: Extract archive if present
         run: |
           if [ -f unilingua_ai.zip ]; then
-            unzip -o unilingua_ai.zip
+            python3 -c '
+          import os, zipfile
+          with zipfile.ZipFile("unilingua_ai.zip") as z:
+              for info in z.infolist():
+                  rel = info.filename.replace("\\", "/")
+                  if not rel or rel.endswith("/") or rel.startswith(".github/"):
+                      continue
+                  os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
+                  with z.open(info) as src, open(rel, "wb") as dst:
+                      dst.write(src.read())
+          '
           fi
 
       - name: Setup Java 17
@@ -89,7 +99,17 @@ jobs:
       - name: Extract archive if present
         run: |
           if [ -f unilingua_ai.zip ]; then
-            unzip -o unilingua_ai.zip
+            python3 -c '
+          import os, zipfile
+          with zipfile.ZipFile("unilingua_ai.zip") as z:
+              for info in z.infolist():
+                  rel = info.filename.replace("\\", "/")
+                  if not rel or rel.endswith("/") or rel.startswith(".github/"):
+                      continue
+                  os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
+                  with z.open(info) as src, open(rel, "wb") as dst:
+                      dst.write(src.read())
+          '
           fi
 
       - name: Setup Flutter
