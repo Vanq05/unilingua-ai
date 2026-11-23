@@ -238,5 +238,6 @@ jobs:
           TAG="v1.2.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" release_assets/UniLinguaAI.apk release_assets/UniLinguaAI.ipa \
             --title "UniLingua AI $TAG" \
+            --repo "${{ github.repository }}" \
             --notes "Bản cập nhật tự động (Cố định chữ ký số Android cài đè trực tiếp không mất dữ liệu)." \
             --latest
