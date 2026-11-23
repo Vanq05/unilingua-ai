@@ -199,12 +199,31 @@ jobs:
             --build-number="${BUILD_NUM}" \
             --dart-define="APP_VERSION=1.2.${GITHUB_RUN_NUMBER}"
 
-      - name: Package Runner.app into UniLinguaAI.ipa
+      - name: Package ESign-compatible Runner.app into UniLinguaAI.ipa
         run: |
+          rm -rf build/ipa
           mkdir -p build/ipa/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          ditto build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          APP="build/ipa/Payload/Runner.app"
+          xattr -cr "$APP" || true
+          find "$APP" -name ".DS_Store" -delete || true
+          chmod +x "$APP/Runner"
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 14.0" "$APP/Info.plist" || true
+          if [ -d "$APP/Frameworks" ]; then
+            for fw in "$APP/Frameworks"/*.framework; do
+              if [ -d "$fw" ]; then
+                fw_name=$(basename "$fw" .framework)
+                [ -f "$fw/$fw_name" ] && chmod +x "$fw/$fw_name"
+                [ -f "$fw/Info.plist" ] && /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 14.0" "$fw/Info.plist" || true
+                rm -rf "$fw/_CodeSignature"
+                codesign --force --sign - --timestamp=none "$fw"
+              fi
+            done
+          fi
+          rm -rf "$APP/_CodeSignature"
+          codesign --force --sign - --timestamp=none "$APP"
           cd build/ipa
-          zip -r -9 UniLinguaAI.ipa Payload
+          zip -r -y -9 UniLinguaAI.ipa Payload -x "*.DS_Store" -x "__MACOSX/*"
 
       - name: Upload UniLinguaAI.ipa artifact
         uses: actions/upload-artifact@v4
@@ -237,7 +256,7 @@ jobs:
         run: |
           TAG="v1.2.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" release_assets/UniLinguaAI.apk release_assets/UniLinguaAI.ipa \
-            --title "UniLingua AI $TAG" \
             --repo "${{ github.repository }}" \
+            --title "UniLingua AI $TAG" \
             --notes "Bản cập nhật tự động (Cố định chữ ký số Android cài đè trực tiếp không mất dữ liệu)." \
             --latest
