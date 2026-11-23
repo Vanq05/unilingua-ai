@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     name: Build Android APK
@@ -49,7 +52,7 @@ jobs:
             --org com.unilingua.ai \
             --project-name unilingua_ai
 
-      - name: Configure Android display name, permissions & SDK versions
+      - name: Configure Android permissions, Speech Queries & Fixed Release Signing
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/android:label="[^"]*"/android:label="UniLingua AI"/' "$MANIFEST"
@@ -59,11 +62,41 @@ jobs:
           if ! grep -q "android.permission.RECORD_AUDIO" "$MANIFEST"; then
             sed -i 's/<application/<uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <application/' "$MANIFEST"
           fi
+          if ! grep -q "android.speech.RecognitionService" "$MANIFEST"; then
+            sed -i 's/<\/queries>/<intent><action android:name="android.speech.RecognitionService"\/><\/intent>\n    <\/queries>/' "$MANIFEST"
+          fi
           if [ -f android/app/build.gradle ]; then
             sed -i -E 's/minSdk(Version)?[[:space:]=]+[a-zA-Z0-9._]+/minSdk 23/g' android/app/build.gradle
           fi
           if [ -f android/app/build.gradle.kts ]; then
             sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[a-zA-Z0-9._]+/minSdk = 23/g' android/app/build.gradle.kts
+          fi
+
+          if [ -f android_signing/unilingua-release.p12 ]; then
+            cp android_signing/unilingua-release.p12 android/app/unilingua-release.p12
+            ALIAS=$(keytool -list -keystore android/app/unilingua-release.p12 -storetype PKCS12 -storepass unilingua2026 | awk -F, '/PrivateKeyEntry/{print $1; exit}' | xargs)
+            echo "Resolved fixed release keystore alias: [$ALIAS]"
+            python3 - "$ALIAS" <<'PY'
+          import os, sys, re
+          alias = sys.argv[1] or "1"
+          kts = "android/app/build.gradle.kts"
+          if os.path.exists(kts):
+              txt = open(kts, "r", encoding="utf-8").read()
+              signing_block = f'''
+              signingConfigs {{
+                  create("release") {{
+                      storeFile = file("unilingua-release.p12")
+                      storePassword = "unilingua2026"
+                      keyAlias = "{alias}"
+                      keyPassword = "unilingua2026"
+                      storeType = "PKCS12"
+                  }}
+              }}
+          '''
+              txt = txt.replace("buildTypes {", signing_block + "\n    buildTypes {", 1)
+              txt = txt.replace('signingConfig = signingConfigs.getByName("debug")', 'signingConfig = signingConfigs.getByName("release")')
+              open(kts, "w", encoding="utf-8").write(txt)
+          PY
           fi
 
       - name: Install dependencies & generate custom app icons
@@ -76,9 +109,13 @@ jobs:
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test
 
-      - name: Build Android Release APK
+      - name: Build Android Release APK (Fixed Signature & Incrementing Build Number)
         run: |
-          flutter build apk --release
+          BUILD_NUM=$((GITHUB_RUN_NUMBER + 10))
+          flutter build apk --release \
+            --build-name="1.2.${GITHUB_RUN_NUMBER}" \
+            --build-number="${BUILD_NUM}" \
+            --dart-define="APP_VERSION=1.2.${GITHUB_RUN_NUMBER}"
           cp build/app/outputs/flutter-apk/app-release.apk build/UniLinguaAI.apk
 
       - name: Upload UniLinguaAI.apk artifact
@@ -155,7 +192,12 @@ jobs:
           flutter test
 
       - name: Build iOS release app (unsigned)
-        run: flutter build ios --release --no-codesign
+        run: |
+          BUILD_NUM=$((GITHUB_RUN_NUMBER + 10))
+          flutter build ios --release --no-codesign \
+            --build-name="1.2.${GITHUB_RUN_NUMBER}" \
+            --build-number="${BUILD_NUM}" \
+            --dart-define="APP_VERSION=1.2.${GITHUB_RUN_NUMBER}"
 
       - name: Package Runner.app into UniLinguaAI.ipa
         run: |
@@ -170,3 +212,31 @@ jobs:
           name: UniLinguaAI-ipa
           path: build/ipa/UniLinguaAI.ipa
           retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release (In-App Auto-Update)
+    needs: [build-apk, build-ipa]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: UniLinguaAI-apk
+          path: release_assets
+
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: UniLinguaAI-ipa
+          path: release_assets
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.2.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" release_assets/UniLinguaAI.apk release_assets/UniLinguaAI.ipa \
+            --title "UniLingua AI $TAG" \
+            --notes "Bản cập nhật tự động (Cố định chữ ký số Android cài đè trực tiếp không mất dữ liệu)." \
+            --latest
